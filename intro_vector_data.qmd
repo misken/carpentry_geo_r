@@ -1,0 +1,432 @@
+---
+title: "Open and plot shapefiles"
+format: html
+editor: visual
+---
+
+Now it's time for vector data. We'll use **sf**, the simple features library. Let's load **terra** as well in case we want to create plots that combine vector and raster data. The **rgdal** library is automatically loaded when **sf** is loaded. I think **rgdal** is being deprecated in 2023 - yes, see https://cran.r-project.org/web/packages/rgdal/index.html. They recommend "plan transition to sf/stars/'terra' functions using 'GDAL' and 'PROJ' at your earliest convenience". So, seems like **sf** must have its own interface to GDAL.
+
+It [seems like `st_read` and `st_write`](https://r-spatial.github.io/sf/articles/sf2.html) are the interface to GDAL. I'm assuming they don't use **rdgal**.
+
+
+
+```{r warning=FALSE}
+library(sf)
+library(terra)
+```
+
+The shapefiles that we will import are:
+
+-   A polygon shapefile representing our field site boundary,
+-   A line shapefile representing roads, and
+-   A point shapefile representing the location of the Fisher flux tower located at the NEON Harvard Forest field site.
+
+Start with our *area of interest* boundary. We use `st_read` to read the shapefile containing the polygon data.
+
+```{r}
+aoi_boundary_HARV <- st_read(
+  "data/NEON-DS-Site-Layout-Files/HARV/HarClip_UTMZ18.shp")
+```
+
+The `aoi_boundary_HARV` is a simple feature object containing two variables:
+
+-   an `id`
+-   a `geometry`
+
+The `geometry` contains the polygon information.
+
+```{r}
+aoi_boundary_HARV$geometry
+```
+
+We can get at an `sf` object's metadata via a bunch of functions.
+
+```{r}
+st_geometry_type(aoi_boundary_HARV)
+```
+
+```{r}
+st_crs(aoi_boundary_HARV)
+```
+
+```{r}
+st_bbox(aoi_boundary_HARV)
+```
+
+```{r}
+st_geometry(aoi_boundary_HARV)
+```
+
+```{r}
+```
+
+## Plot a shapefile
+
+Unlike with raster data, we do **not** need to convert a simple features vector object to a dataframe for plotting with **ggplot2**.
+
+```{r}
+ggplot() + 
+  geom_sf(data = aoi_boundary_HARV, size = 3, color = "black", fill = "cyan1") + 
+  ggtitle("AOI Boundary Plot") + 
+  coord_sf()
+```
+
+```{r}
+lines_HARV <- st_read(
+  "data/NEON-DS-Site-Layout-Files/HARV/HARV_roads.shp")
+
+point_HARV <- st_read(
+  "data/NEON-DS-Site-Layout-Files/HARV/HARVtower_UTM18N.shp")
+```
+
+Notice that while the CRS are the same, the bounding boxes are different as they are specific to each shape file based on the lines or points being represented. The bbox is the smallest rectangle containing the geometry items.
+
+```{r}
+class(lines_HARV)
+class(point_HARV)
+```
+
+So, vector objects are really just special dataframes. This is similar to GeoPandas and its `GeoDataFrame`.
+
+Each row in the data frame is a line, or point, or whatever geometric object type it is. There's a `geometry` field that contains the information needed to reconstruct the vector.
+
+# Explore and Plot by Vector Layer Attributes
+
+Since our vectors are in dataframes, it shuold be easy to use standard tools like dplyr to select items of interest for plotting or computation.
+
+```{r}
+lines_HARV
+```
+
+```{r}
+point_HARV
+```
+
+```{r}
+names(lines_HARV)
+```
+
+```{r}
+names(point_HARV)
+```
+
+Let's look the type of line objects.
+
+```{r}
+lines_HARV %>% 
+  group_by(TYPE) %>% 
+  count()
+```
+
+Let's grab just the footpaths and then plot them.
+
+```{r}
+footpath_HARV <- lines_HARV %>% 
+  filter(TYPE == "footpath")
+nrow(footpath_HARV)
+```
+
+```{r}
+ggplot() + 
+  geom_sf(data = footpath_HARV, aes(color = factor(OBJECTID)), size = 1) +
+  labs(color = 'Footpath ID') +
+  ggtitle("NEON Harvard Forest Field Site", subtitle = "Footpaths") + 
+  coord_sf()
+```
+
+```{r}
+lines_HARV %>% 
+  filter(TYPE == 'boardwalk') %>% 
+ggplot() +  
+  geom_sf(data = footpath_HARV, aes(color = factor(OBJECTID)), size = 1) +
+  geom_sf(aes(color = factor(OBJECTID)), size = 1) +
+  labs(color = 'ID') +
+  ggtitle("NEON Harvard Forest Field Site", subtitle = "Boardwalks and Footpaths") + 
+  coord_sf()
+```
+
+We can plot them all together with a single `geom_sf` but then I think it's hard to customize the line styles. That's why we need to create data subsets and use separate `geom_sf` calls.
+
+```{r}
+lines_HARV %>% 
+  ggplot() +
+  geom_sf(aes(color = TYPE)) +
+  labs(color = 'Type') +
+  ggtitle("NEON Harvard Forest Field Site", subtitle = "Lines") + 
+  coord_sf()
+```
+
+Ah, of course, we can do this.
+
+```{r}
+road_colors <- c("blue", "green", "navy", "purple")
+line_widths <- c(1, 2, 3, 4)
+
+ggplot() +
+  geom_sf(data = lines_HARV, aes(color = TYPE)) + 
+  scale_color_manual(values = road_colors) +
+  labs(color = 'Road Type') +
+  scale_size_manual(values = line_widths) +
+  ggtitle("NEON Harvard Forest Field Site", subtitle = "Roads & Trails - Line width varies") + 
+  coord_sf()
+```
+
+### Challenge - custom line widths by attribute
+
+In the example above, we set the line widths to be 1, 2, 3, and 4. Because R orders factor levels alphabetically by default, this gave us a plot where woods roads (the last factor level) were the thickest and boardwalks were the thinnest.
+
+Let's create another plot where we show the different line types with the following thicknesses:
+
+-   woods road size = 6
+-   boardwalks size = 1
+-   footpath size = 3
+-   stone wall size = 2
+
+```{r}
+road_colors <- c("blue", "green", "navy", "purple")
+line_widths <- c(1, 3, 2, 6)
+
+ggplot() +
+  geom_sf(data = lines_HARV, aes(color = TYPE)) + 
+  scale_color_manual(values = road_colors) +
+  labs(color = 'Road Type') +
+  scale_size_manual(values = line_widths) +
+  ggtitle("NEON Harvard Forest Field Site", subtitle = "Roads & Trails - Line width varies") + 
+  coord_sf()
+```
+
+```{r}
+palette(terrain.colors(6))
+
+ggplot() + 
+  geom_sf(data = lines_HARV, aes(color = TYPE), size = 1.5) +
+  labs(color = 'Road Type') +
+  theme(legend.text = element_text(size = 20), 
+        legend.box.background = element_rect(size = 1)) + 
+  ggtitle("NEON Harvard Forest Field Site", 
+          subtitle = "Roads & Trails - Modified Legend") +
+  coord_sf()
+
+palette("default")
+```
+
+```{r}
+# First, create a data frame with only those roads where bicycles and horses are allowed
+lines_removeNA <- lines_HARV[!is.na(lines_HARV$BicyclesHo),] 
+lines_showHarv <- lines_removeNA %>% filter(BicyclesHo == "Bicycles and Horses Allowed")
+
+# Next, visualise using ggplot
+ggplot() + 
+  geom_sf(data = lines_HARV) + 
+  geom_sf(data = lines_showHarv, aes(color = BicyclesHo), size = 2) + 
+  scale_color_manual(values = "magenta") +
+  ggtitle("NEON Harvard Forest Field Site", subtitle = "Roads Where Bikes and Horses Are Allowed") + 
+  coord_sf()
+```
+
+# Plot multiple shapefiles
+
+```{r}
+ggplot() + 
+  geom_sf(data = aoi_boundary_HARV, fill = "grey", color = "grey") +
+  geom_sf(data = lines_HARV, aes(color = TYPE), size = 1) +
+  geom_sf(data = point_HARV) +
+  ggtitle("NEON Harvard Forest Field Site") + 
+  coord_sf()
+```
+
+Use `show.legend` to customize legend and use `name =` to customize name used in legend (this is done in the scale calls).
+
+```{r}
+ggplot() + 
+  geom_sf(data = aoi_boundary_HARV, fill = "grey", color = "grey") +
+  geom_sf(data = point_HARV, aes(fill = Sub_Type)) +
+  geom_sf(data = lines_HARV, aes(color = TYPE), show.legend = "line",
+          size = 1) + 
+  scale_color_manual(values = road_colors, name = "Line Type") + 
+  scale_fill_manual(values = "black", name = "Tower Location") + 
+  ggtitle("NEON Harvard Forest Field Site") + 
+  coord_sf()
+```
+
+## Plot raster and vector together
+
+Read in raster data.
+
+```{r}
+CHM_HARV <- rast("data/NEON-DS-Airborne-Remote-Sensing/HARV/CHM/HARV_chmCrop.tif")
+CHM_HARV_df <- as.data.frame(CHM_HARV, xy = TRUE)
+```
+
+```{r}
+ggplot() +
+ geom_raster(data = CHM_HARV_df , aes(x = x, y = y, fill = HARV_chmCrop)) + 
+    scale_fill_gradientn(name = "Canopy Height", colors = terrain.colors(10)) +
+    coord_quickmap() + xlab("Easting") + ylab("Northing")
+```
+
+```{r}
+ggplot() +
+  geom_raster(data = CHM_HARV_df, aes(x = x, y = y, fill = HARV_chmCrop)) +
+  geom_sf(data = lines_HARV, color = "black") +
+  geom_sf(data = aoi_boundary_HARV, color = "grey20", size = 1) +
+  geom_sf(data = point_HARV, pch = 8) +
+  ggtitle("NEON Harvard Forest Field Site w/ Canopy Height Model") + 
+  coord_sf()
+```
+
+# Ch 9 - Handling Spatial Projection & CRS
+
+https://preview.carpentries.org/r-raster-vector-geospatial/09-vector-when-data-dont-line-up-crs.html
+
+```{r}
+# State boundaries
+state_boundary_US <- st_read("data/NEON-DS-Site-Layout-Files/US-Boundary-Layers/US-State-Boundaries-Census-2014.shp")
+
+# Workaround shapefile error - use terra::vect followed by st_as_sf
+state_boundary_US_terra <- terra::vect("data/NEON-DS-Site-Layout-Files/US-Boundary-Layers/US-State-Boundaries-Census-2014.shp")
+
+state_boundary_US_sf <- st_as_sf(state_boundary_US_terra)
+
+# Country boundary
+country_boundary_US <- st_read("data/NEON-DS-Site-Layout-Files/US-Boundary-Layers/US-Boundary-Dissolved-States.shp")
+
+country_boundary_US_terra <- terra::vect("data/NEON-DS-Site-Layout-Files/US-Boundary-Layers/US-Boundary-Dissolved-States.shp")
+
+country_boundary_US_sf <- st_as_sf(country_boundary_US_terra)
+```
+Let's plot the US map.
+
+```{r}
+ggplot() +
+  geom_sf(data = state_boundary_US) +
+  ggtitle("Map of Contiguous US State Boundaries") +
+  coord_sf()
+```
+See https://github.com/r-spatial/sf/issues/2046. 
+
+Hmmm. The **sf** package seems to be having trouble with this shapefile.
+
+```{r}
+ggplot() +
+  geom_sf(data = state_boundary_US_sf) +
+  ggtitle("Map of Contiguous US State Boundaries") +
+  coord_sf()
+```
+
+Now we'll plot the country boundary layer with a thicker line and
+combine with the state boundary layer.
+
+```{r}
+ggplot() +
+  geom_sf(data = country_boundary_US_sf, color = "gray18", size = 2) +
+  geom_sf(data = state_boundary_US_sf, color = "gray40") +
+  ggtitle("Map of Contiguous US State Boundaries") +
+  coord_sf()
+```
+
+Now we want to add the flux tower. First check the CRS.
+
+```{r}
+st_crs(point_HARV)
+```
+
+What about the US map?
+
+```{r}
+crs(state_boundary_US_sf)
+```
+
+The US map layers are not UTM. They use lat/long instead of meters. We can see this in the bboxes.
+
+```{r}
+st_bbox(point_HARV)
+st_bbox(country_boundary_US_sf)
+```
+
+I think ggplot might be able to do the reprojection on the fly.
+
+```{r}
+ggplot() +
+  geom_sf(data = country_boundary_US_sf, size = 2, color = "gray18") +
+  geom_sf(data = state_boundary_US_sf, color = "gray40") +
+  geom_sf(data = point_HARV, shape = 19, color = "purple") +
+  ggtitle("Map of Contiguous US State Boundaries") +
+  coord_sf()
+```
+
+## Convert from csv to other formats
+
+The Carpentry tutorial shows how to convert to shapefile, but let's also convert
+to some non-ESRI things like a GeoPackage.
+
+```{r}
+plot_locations_HARV <-
+  read.csv("data/NEON-DS-Site-Layout-Files/HARV/HARV_PlotLocations.csv")
+
+str(plot_locations_HARV)
+```
+
+Instead of lat/long fields we have `easting` and `northing`.
+
+We could build a proj4 string from the `geodeticDa` and `utmZone` fields or
+use some other data source that has the CRS we want as a template to set the
+CRS for this new data. From the [spatial reference website](https://www.spatialreference.org/ref/epsg/wgs-84-utm-zone-18n/proj4/) we find that the
+string is `+proj=utm +zone=18 +ellps=WGS84 +datum=WGS84 +units=m +no_defs `.
+
+```{r}
+crs(lines_HARV)
+```
+
+First we need to turn the dataframe into a simple features object. We can
+specify the coordinate fields and the CRS in the same step.
+
+```{r}
+plot_locations_sp_HARV <- st_as_sf(plot_locations_HARV, 
+                                   coords = c('easting', 'northing'),
+                                   crs = crs(lines_HARV))
+
+
+```
+
+Let's plot along with are HARV boundary.
+
+```{r}
+ggplot() +
+  geom_sf(data = aoi_boundary_HARV) +
+  geom_sf(data = plot_locations_sp_HARV) +
+  ggtitle("AOI Boundary Plot")
+```
+Let's add some more stuff!
+
+
+
+```{r}
+NewPhen_HARV <-
+  read.csv("data/NEON-DS-Site-Layout-Files/HARV/HARV_2NewPhenPlots.csv")
+
+str(NewPhen_HARV)
+```
+
+```{r}
+NewPhen_sp_HARV <- st_as_sf(NewPhen_HARV, 
+                                   coords = c('decimalLon', 'decimalLat'),
+                                   crs = crs(country_boundary_US_sf))
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = aoi_boundary_HARV) +
+  geom_sf(data = plot_locations_sp_HARV, shape = 19, color = "purple") +
+  geom_sf(data = NewPhen_sp_HARV, shape = 15, color = "green") +
+  ggtitle("AOI Boundary Plot")
+```
+
+Finally let's write out one of these simple feature objects to a file. We can
+use any [GDAL supported driver](https://gdal.org/drivers/vector/index.html).
+
+
+```{r}
+st_write(plot_locations_sp_HARV, "data/plot_locations_sp_HARV.gpkg", driver = "GPKG" )
+```
+

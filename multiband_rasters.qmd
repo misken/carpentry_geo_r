@@ -1,0 +1,128 @@
+---
+title: "Ch 5 - Multi-band rasters"
+format: html
+editor: visual
+---
+
+## Quarto
+
+We'll read an RGB (3-band) raster. By default, `rast` reads in all bands of a multi-band raster file. We can use the `lyrs =` argument to specify one or more bands to read.
+
+```{r}
+RGB_band1_HARV <- 
+  rast("data/NEON-DS-Airborne-Remote-Sensing/HARV/RGB_Imagery/HARV_RGB_Ortho.tif", 
+       lyrs = 1)
+
+RGB_band12_HARV <- 
+  rast("data/NEON-DS-Airborne-Remote-Sensing/HARV/RGB_Imagery/HARV_RGB_Ortho.tif", 
+       lyrs = 1:2)
+
+nlyr(RGB_band12_HARV)
+```
+
+Convert to dataframe and plot.
+
+```{r}
+RGB_band1_HARV_df  <- as.data.frame(RGB_band1_HARV, xy = TRUE)
+str(RGB_band1_HARV_df)
+```
+
+```{r}
+ggplot(RGB_band1_HARV_df) + geom_raster(aes(x, y, alpha=HARV_RGB_Ortho_1))
+```
+
+```{r}
+RGB_band1_HARV
+```
+
+```{r}
+dim(RGB_band1_HARV)
+crs(RGB_band1_HARV)
+res(RGB_band1_HARV)
+```
+
+Wow, the resolution is 0.25 metres.
+
+If we read in the green band (layer 2) and plot it as we did with the red band, we'll see that the forested looking areas are darker in the green band - expected.
+
+### Raster stacks in R
+
+Let's read in all the bands.
+
+```{r}
+RGB_stack_HARV <- 
+  rast("data/NEON-DS-Airborne-Remote-Sensing/HARV/RGB_Imagery/HARV_RGB_Ortho.tif")
+```
+
+```{r}
+RGB_stack_HARV
+```
+
+To look at specific band we can use the `[[]]` operator.
+
+```{r}
+RGB_stack_HARV[[2]]
+```
+
+What happens if we use single brackets? Ah, of course, we get the band values for that row in the raster.
+
+```{r}
+RGB_stack_HARV[1:5]
+
+```
+
+How do we get at dimension values?
+
+```{r}
+xFromCol(RGB_stack_HARV, c(1, 10, ncol(RGB_stack_HARV)))
+yFromRow(RGB_stack_HARV, c(1, 5, nrow(RGB_stack_HARV)))
+xyFromCell(RGB_stack_HARV, c(1))
+xyFromCell(RGB_stack_HARV, c(ncol(RGB_stack_HARV) * nrow(RGB_stack_HARV)))
+```
+
+Notice that cell values are just found from counting left to right across the columns and then down the rows.
+
+### Create an 3-band RGB image
+
+We can use the `terra::plotRGB()` function.
+
+> This function allows us to:
+>
+> -   Identify what bands we want to render in the red, green and blue regions. The plotRGB() function defaults to a 1=red, 2=green, and 3=blue band order. However, you can define what bands you'd like to plot manually. Manual definition of bands is useful if you have, for example a near-infrared band and want to create a color infrared image.
+> -   Adjust the stretch of the image to increase or decrease contrast.
+
+```{r}
+plotRGB(RGB_stack_HARV)
+# Defaults are:
+# plotRG(RGB_stack_HARV, r = 1, g = 2, b = 3)
+```
+
+How does image stretching work?
+
+RGB values are stretched to use the full 0-255 range.
+
+```{r}
+plotRGB(RGB_stack_HARV, stretch = "lin")
+```
+
+This stretches in a non-linear way using the histogram of values to determine the stretched values.
+
+```{r}
+plotRGB(RGB_stack_HARV, stretch = "hist")
+```
+
+### SpatRaster in R
+
+The `SpatRaster` class is the primary way of representing raster objects in **terra**. A `SpatRasterDataset` is essentially a collection of `SpatRaster` objects, it seems. This is reminiscent of `DataArray` and `DataSet` in Python's **xarray** package.
+
+The `sds()` function is used to create a `SpatRasterDataset`.
+
+```{r}
+methods(class=class(RGB_stack_HARV))
+```
+
+```{r}
+methods(class=class(RGB_stack_HARV[[1]]))
+```
+
+No difference discernible.

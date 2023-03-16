@@ -1,0 +1,260 @@
+---
+title: "Reproject raster data"
+format: html
+---
+
+## Reproject raster data
+
+https://preview.carpentries.org/r-raster-vector-geospatial/03-raster-reproject-in-r.html
+
+**NOTE: Much of the online chapter hasn't yet been updated from use of raster package
+to the terra package. Pretty easy to find the new functions.
+
+```{r message=FALSE}
+library(terra)
+library(ggplot2)
+library(dplyr)
+```
+
+> In the Plot Raster Data in R episode, we learned how to layer a raster file on top of a hillshade for a nice looking basemap. In that episode, all of our data were in the same CRS. What happens when things don’t line up?
+>
+> For this episode, we will be working with the Harvard Forest Digital Terrain Model data. This differs from the surface model data we’ve been working with so far in that the digital surface model (DSM) includes the tops of trees, while the digital terrain model (DTM) shows the ground level.
+>
+> We’ll be looking at another model (the canopy height model) in a later episode and will see how to calculate the CHM from the DSM and DTM. Here, we will create a map of the Harvard Forest Digital Terrain Model (DTM_HARV) draped or layered on top of the hillshade (DTM_hill_HARV). The hillshade layer maps the terrain using light and shadow to create a 3D-looking image, based on a hypothetical illumination of the ground level.
+
+Read in the terrain model and the hillshade raster and then convert to dataframes.
+
+```{r}
+DTM_HARV <- rast("data/NEON-DS-Airborne-Remote-Sensing/HARV/DTM/HARV_dtmCrop.tif")
+DTM_HARV_df <- as.data.frame(DTM_HARV, xy = TRUE)
+DTM_hill_HARV <- rast("data/NEON-DS-Airborne-Remote-Sensing/HARV/DTM/HARV_DTMhill_WGS84.tif")
+DTM_hill_HARV_df <- as.data.frame(DTM_hill_HARV, xy = TRUE)
+```
+
+Assuming that both rasters use the same CRS, we can plot the DTM over the hillshade raster.
+
+```{r}
+ggplot() +
+     geom_raster(data = DTM_HARV_df , 
+                 aes(x = x, y = y, 
+                  fill = HARV_dtmCrop)) + 
+     geom_raster(data = DTM_hill_HARV_df, 
+                 aes(x = x, y = y, 
+                   alpha = HARV_DTMhill_WGS84)) +
+     scale_fill_gradientn(name = "Elevation", colors = terrain.colors(10)) + 
+     coord_quickmap()
+```
+
+Welp, something is wrong.
+
+```{r}
+crs(DTM_HARV)
+```
+
+```{r}
+crs(DTM_hill_HARV)
+```
+
+Yep, the hillshade raster isn't using UTM. DTM_HARV is in the UTM projection, with units of meters. DTM_hill_HARV is in Geographic WGS84 - which is represented by latitude and longitude values.
+
+### Reproject the hillshade raster
+
+As long as both rasters have a defined CRS, we can reproject one onto the other. We'll reproject hillshade so that it uses UTM.
+Reprojection actually **changes the data** in the raster object.
+
+The syntax is `project(fromRasterObject, toRasterObject)`. The `toRasterObject` serves
+as a *template* from which the new CRS is defined.
+
+```{r}
+DTM_hill_UTMZ18N_HARV <- project(DTM_hill_HARV, DTM_HARV)
+DTM_hill_UTMZ18N_HARV_df <- as.data.frame(DTM_hill_UTMZ18N_HARV, xy = TRUE)
+names(DTM_hill_UTMZ18N_HARV_df)[3] <- 'HARV_DTMhill_UTMZ18N'
+```
+
+Retry the plot.
+
+```{r}
+ggplot() +
+     geom_raster(data = DTM_HARV_df , 
+                 aes(x = x, y = y, 
+                  fill = HARV_dtmCrop)) + 
+     geom_raster(data = DTM_hill_UTMZ18N_HARV_df, 
+                 aes(x = x, y = y, 
+                   alpha = HARV_DTMhill_UTMZ18N)) +
+     scale_fill_gradientn(name = "Elevation", colors = terrain.colors(10)) + 
+     coord_quickmap()
+```
+Nice!
+
+```{r}
+crs(DTM_hill_UTMZ18N_HARV)
+```
+
+```{r}
+ext(DTM_hill_HARV)
+ext(DTM_hill_UTMZ18N_HARV)
+```
+
+Notice how both the CRS and extent have changed.
+
+### Deal with raster resolution
+
+Let's see if reprojecting the raster changed the resolution.
+
+```{r}
+res(DTM_HARV)
+res(DTM_hill_UTMZ18N_HARV)
+```
+
+It looks like resolution matching is now the default behavior in `terra::project`, whereas
+in `raster::rasterProject` we need to specify a `res = res(target)` argument.
+
+## Ch 4 - Raster calculations
+
+https://preview.carpentries.org/r-raster-vector-geospatial/04-raster-calculations-in-r.html
+
+Recall the DTM elevation plot (Digital Terrain Model).
+
+```{r}
+ ggplot() +
+      geom_raster(data = DTM_HARV_df , 
+              aes(x = x, y = y, fill = HARV_dtmCrop)) +
+     scale_fill_gradientn(name = "Elevation", colors = terrain.colors(10)) + 
+     coord_quickmap()
+```
+
+And the DSM (Digital Surface Model).
+
+```{r}
+DSM_HARV <-
+  rast("data/NEON-DS-Airborne-Remote-Sensing/HARV/DSM/HARV_dsmCrop.tif")
+
+DSM_HARV_df <- terra::as.data.frame(DSM_HARV, xy = TRUE)
+```
+
+
+```{r}
+ggplot() +
+      geom_raster(data = DSM_HARV_df , 
+              aes(x = x, y = y, fill = HARV_dsmCrop)) +
+     scale_fill_gradientn(name = "Elevation", colors = terrain.colors(10)) + 
+     coord_quickmap()
+```
+
+### Two ways to do raster calculations
+
+> We can calculate the difference between two rasters in two different ways:
+>
+> * by directly subtracting the two rasters in R using raster math
+>
+or for more efficient processing - particularly if our rasters are large and/or the calculations we are performing are complex:
+>
+> * using the overlay() function.
+
+To compute a Canopy Height Model (CHM), we subtract the DTM from the DSM (removes the terrain effect from the surface model). We can do direct raster subtraction - it's just like subtracting nd-arrays in Numpy.
+
+```{r}
+# Subtract the rasters
+CHM_HARV <- DSM_HARV - DTM_HARV
+
+# Convert to df and rename value column
+CHM_HARV_df <- as.data.frame(CHM_HARV, xy = TRUE)
+names(CHM_HARV_df)[3] <- "CHM_HARV"
+
+# Plot the canopy height model
+ggplot() +
+   geom_raster(data = CHM_HARV_df , 
+               aes(x = x, y = y, fill = CHM_HARV)) + 
+   scale_fill_gradientn(name = "Canopy Height", colors = terrain.colors(10)) + 
+   coord_quickmap()
+```
+Histo of canopy height.
+
+```{r}
+ggplot(CHM_HARV_df) +
+    geom_histogram(aes(CHM_HARV)) + xlab("meters")
+```
+
+### Efficient Raster Calculations: Overlay Function
+
+Overlay is more efficient than direct raster math when:
+
+-    The rasters we are using are larger in size.
+-    The rasters are stored as individual files.
+-    The computations performed are complex.
+
+Welp, looks like `overlay` is from the **raster** package. What is the **terra** equivalent?
+
+https://rspatial.org/raster/rosu/Chapter11.html - `raster::overlay`
+
+Looks like there are functions in **terra** such as `lapp` and `rapp`. We'll leave
+this for another day
+
+### Exporting to GeoTIFF
+
+```{r}
+writeRaster(CHM_HARV, "data/CHM_HARV.tiff",
+            overwrite=TRUE,
+            NAflag=-9999)
+```
+
+## Challenge: Explore the NEON San Joaquin Experimental Range Field Site
+
+Let's compare SJER (California) to HARV (Mass)
+
+data/NEON-DS-Airborne-Remote-Sensing/SJER/
+
+Read in the raster files.
+
+```{r}
+DSM_SJER <-
+  rast("data/NEON-DS-Airborne-Remote-Sensing/SJER/DSM/SJER_dsmCrop.tif")
+
+DTM_SJER <-
+  rast("data/NEON-DS-Airborne-Remote-Sensing/SJER/DTM/SJER_dtmCrop.tif")
+```
+
+Check all the CRS and units for both sites.
+
+```{r}
+crs(DSM_SJER)
+crs(DSM_SJER) == crs(DTM_SJER)
+```
+```{r}
+crs(DSM_HARV)
+crs(DSM_HARV) == crs(DTM_HARV)
+```
+
+The sites, obviously, are in different UTM zones but that shouldn't matter.
+
+```{r}
+# Subtract the rasters
+CHM_SJER <- DSM_SJER - DTM_SJER
+
+# Convert to df and rename value column
+CHM_SJER_df <- as.data.frame(CHM_SJER, xy = TRUE)
+names(CHM_SJER_df)[3] <- "CHM_SJER"
+
+# Plot the canopy height model
+ggplot() +
+   geom_raster(data = CHM_SJER_df , 
+               aes(x = x, y = y, fill = CHM_SJER)) + 
+   scale_fill_gradientn(name = "Canopy Height", colors = terrain.colors(10)) + 
+   coord_quickmap()
+
+# Plot histo
+ggplot(CHM_SJER_df) +
+    geom_histogram(aes(CHM_SJER)) + xlab("meters")
+
+# Export GeoTIFF
+writeRaster(CHM_SJER, "data/CHM_HARV.tiff",
+            overwrite=TRUE,
+            NAflag=-9999)
+
+```
+
+Totally different veg structures. 
+
+- histos show SJER dominated by almost no canopy whereas HARV has significant canopy cover
+
+- plots show same as well as SJER being very uniform.

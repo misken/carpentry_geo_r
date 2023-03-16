@@ -1,0 +1,383 @@
+---
+title: "Intro to Raster Data"
+format: html
+---
+
+## Data
+
+The data is described here: https://datacarpentry.org/geospatial-workshop/#data.
+
+```{r message=FALSE}
+library(terra)
+library(ggplot2)
+library(dplyr)
+library(jsonlite)
+```
+
+https://www.neonscience.org/about
+
+The [**raster** package]() was the package of choice but now both [**terra**]() and [**stars**]() seem to have
+supplanted it. The same person (Robert Hijmans) who wrote **raster** is also the main dev for **terra**. It seems that **terra** is somewhat more efficient (speed or space?). The primary data classes in **raster** are the `RasterLayer`, `RasterStack` (a collection of `RasterLayer` objects under the hood) and `RasterBrick` (true multi-layer object but can only reference a single file). In **terra**, the `SpatRaster` is the class that handles single and multi-layer raster objects. There are functions for translating between the the two packages.
+
+There's a very good comparison of **terra** and **stars** in [the Raster Data chapter of Geocomputation with R](https://r.geocompx.org/spatial-class.html#r-packages-for-working-with-raster-data). The **terra** package is somewhat simpler and focuses on regular rectangular rasters of one or more layers. The **stars** package can handle [more complex raster shapes](https://r-spatial.github.io/stars/) as well as data cubes (several bands, a time dimension, x and y coordinates, many attributes). The Python package **xarray** seems similar to **stars** and **terra**. In **stars**,
+the vector data classes are the same as in the **sf** package whereas **terra** uses its own `SpatVector` class.
+
+
+
+## View raster file attributes
+
+The raster files are GeoTIFF files. We can view overall file info via
+the [GDALInfo tool](https://gdal.org/programs/gdalinfo.html). It's wrapped by the `terra::describe()` function.
+
+```{r}
+HARV_dsmCrop_file <- "data/NEON-DS-Airborne-Remote-Sensing/HARV/DSM/HARV_dsmCrop.tif"
+terra::describe(HARV_dsmCrop_file)
+```
+
+We can store the information in a character vector using the utils function
+`capture.output()`.
+
+```{r capture_gdal_info}
+HARV_dsmCrop_info <- capture.output(
+  describe("data/NEON-DS-Airborne-Remote-Sensing/HARV/DSM/HARV_dsmCrop.tif")
+)
+```
+
+## Open a raster file in R
+
+To load a GeoTIFF raster file into a SpatRaster file, we use the `terra::rast()` function.
+
+```{r load_raster}
+DSM_HARV <-
+  rast("data/NEON-DS-Airborne-Remote-Sensing/HARV/DSM/HARV_dsmCrop.tif")
+
+DSM_HARV
+```
+
+The `SpatRaster` class is a way of representing multi-layer raster file. This
+file only has one layer. A `SpatRaster` feels similar to a Python xarray `DataArray`.
+
+```{r}
+summary(DSM_HARV)
+```
+
+Use `values` to force all cells in the raster to be considered by `summary()`.
+
+```{r}
+summary(values(DSM_HARV))
+```
+
+To plot a `SpatRaster` using ggplot2, we need to create a dataframe. The
+`xy = TRUE` specifies that we want the coordinates included.
+
+```{r}
+DSM_HARV_df <- terra::as.data.frame(DSM_HARV, xy = TRUE)
+str(DSM_HARV_df)
+```
+
+The coordinate values are eastings (x) and northings (y) for our [UTM zone 18N projection](https://www.usgs.gov/faqs/what-does-term-utm-mean-utm-better-or-more-accurate-latitudelongitude).
+
+Now we can use ggplot2 to plot our raster data. A few things to note:
+
+- the `fill` aesthetic are the raster values (elevation values in this case),
+- for the color pallete we are using `scale_fill_viridis_c()` which is color blindness friendly,
+- the `coord_quickmap()` is a quick approximate projection that works well with small areas that aren't too close to the poles.
+
+```{r raster_plot}
+ggplot() +
+    geom_raster(data = DSM_HARV_df , aes(x = x, y = y, fill = HARV_dsmCrop)) +
+    scale_fill_viridis_c() +
+    coord_quickmap()
+```
+There is a built in `plot` function in the terra package that can be used
+directly on the SpatRaster object.
+
+```{r}
+plot(DSM_HARV)
+```
+While we can tell from the raster file metadata output that the easting and
+northing values are in meters. What are the units for the elevation values? This
+information should be (?) part of the coordinate reference system. We can get
+at the details through the `terra::crs()` function.
+
+```{r}
+crs(DSM_HARV, proj = TRUE)
+```
+
+We see that the units are "m", which is meters. Of course, this applies to 
+the x and y coordinates, but the raster values themselves aren't necessarily
+related to the CRS.
+
+There are other ways to plot `SpatRaster` objects, including:
+
+- **terra** has a `plotRGB` function to easily plot RGB (3-band) raster files,
+- the **tmap** package which can create both static and interactive plots
+- the **rasterVis** package to do faceted plotting (useful to time-lapse plots)
+
+
+
+## Raster bands
+
+This raster has only one band. Other rasters such as the 'visual' item form
+Sentinel-2 contain three bands - red, green and blue (already scaled to 0-255).
+
+```{r read_sentinal_rgb}
+rgb_sentinal_example_file <- 'data/iargo_springs.tif'
+terra::describe(rgb_sentinal_example_file)
+```
+Now let's try a Landsat generated file.
+
+
+```{r plot_rgb}
+
+rgb_landsat_example_file <- 'data/NEON-DS-Landsat-NDVI/SJER/2011/RGB/014_SJER_landRGB.tif'
+
+# Read into SpatRaster
+rgb_landsat_example <- rast(rgb_landsat_example_file)
+
+# Plot it
+terra::plotRGB(rgb_landsat_example, r=1, g=2, b=3, scale=255)
+```
+Hmmm, seems a little strange.
+
+
+
+## Dealing with missing data
+
+There is of a `NoDataValue` assigned to raster data to deal with pixels for which
+there is no available data. This can be caused by how the data was collected (e.g. the satellite sweep)
+or other data capture issues. Let's see if this raster file has a such a no data value.
+
+We can use the metadata we saw earlier. The `capture.output()` function doesn't really
+capture the output of `describe()` very well as we don't even get a named character vector.
+There's got to be a better way to get the output of GDALInfo().
+
+```{r}
+HARV_dsmCrop_info[57:60]
+```
+
+```{r}
+gdalinfo_output <- sf::gdal_utils("info", HARV_dsmCrop_file)
+```
+
+```{r}
+class(gdalinfo_output)
+is.vector(gdalinfo_output)
+names(gdalinfo_output)
+```
+
+What about json? Newer versions of GDAL write write json output for the `gdalinfo()` function.
+https://themockup.blog/posts/2020-05-22-parsing-json-in-r-with-jsonlite/
+
+```{r}
+gdalinfo_output_json <- sf::gdal_utils("info", HARV_dsmCrop_file, options = c("-json"), quiet = TRUE)
+
+gdal_info <- jsonlite::fromJSON(gdalinfo_output_json)
+
+gdal_info$coordinateSystem$wkt
+```
+
+Let's write out the JSON.
+
+```{r}
+fileConn<-file("data/gdalinfo_output.json")
+writeLines(gdalinfo_output_json, fileConn)
+close(fileConn)
+```
+
+We can also view it with a built in JSON viewer in R Studio. Well, we
+don't get anything useful.
+
+```{r}
+View(gdalinfo_output_json)
+```
+
+
+## Distribution of elevation values
+
+We can use ggplot2 but need to use the dataframe version of our data.
+
+```{r}
+ggplot(terra::as.data.frame(DSM_HARV)) + geom_histogram(aes(x = HARV_dsmCrop), bins=40)
+```
+
+## Exercise
+
+Challenge: Explore Raster Metadata
+
+Use describe() to determine the following about the NEON-DS-Airborne-Remote-Sensing/HARV/DSM/HARV_DSMhill.tif file:
+
+    Does this file have the same CRS as DSM_HARV?
+    What is the NoDataValue?
+    What is resolution of the raster data?
+    How large would a 5x5 pixel area be on the Earth’s surface?
+    Is the file a multi- or single-band raster?
+
+Notice: this file is a hillshade. We will learn about hillshades in the [Working withMulti-band Rasters in R episode.
+
+
+```{r}
+HARV_dsmHill_file <- "data/NEON-DS-Airborne-Remote-Sensing/HARV/DSM/HARV_DSMhill.tif"
+HARV_dsmHill <- rast(HARV_dsmHill_file)
+terra::describe(HARV_dsmHill_file)
+```
+
+Does this hillshade file use the same CRS as the elevation file?
+
+```{r}
+crs(HARV_dsmHill) == crs(DSM_HARV) 
+```
+
+What is the `NoDataValue`?
+
+> The output of `describe` (i.e. `gdalinfo()`) shows it to be -9999. 
+
+What is the resolution?
+
+> Pixel Size = (1.000000000000000,-1.000000000000000)
+>
+> My guess is that this is from the perspective of the upper left corner of
+a pixel. The units are meters. So, the first 1.0 is the length of the pixel
+along the edge connecting upper left and upper right. The -1.0 value is
+the length of the edge from upper left to lower left (hence, the negative sign).
+
+Area of 5x5 pixels?
+
+> 25m^2
+
+Single or multi-band raster?
+
+> Single (see gdalinfo() output). We can also do check it via **terra** functions.
+
+```{r}
+dim(DSM_HARV)
+nlyr(DSM_HARV)
+```
+
+# Ch 2 - Plotting raster data
+
+Objectives are:
+
+- Build customized plots for a single band raster using the ggplot2 package,
+- Layer a raster dataset on top of a hillshade to create an elegant basemap.
+
+Let's start by binning the elevation field. Then we can use color to show the
+elevation "class".
+
+```{r}
+DSM_HARV_df <- DSM_HARV_df %>%
+                mutate(fct_elevation = cut(HARV_dsmCrop, breaks = 3))
+
+ggplot() +
+    geom_bar(data = DSM_HARV_df, aes(x = fct_elevation))
+```
+The levels for the new `fct_elevation` field are:
+
+```{r}
+unique(DSM_HARV_df$fct_elevation)
+```
+
+```{r}
+DSM_HARV_df %>% 
+  group_by(fct_elevation) %>% 
+  count()
+```
+
+Let's make nicer breakpoints.
+
+```{r}
+custom_bins <- c(300, 350, 400, 450)
+
+DSM_HARV_df <- DSM_HARV_df %>%
+  mutate(fct_elevation_2 = cut(HARV_dsmCrop, breaks = custom_bins))
+
+unique(DSM_HARV_df$fct_elevation_2)
+
+DSM_HARV_df %>% 
+  group_by(fct_elevation_2) %>% 
+  count()
+```
+
+Now we can plot it using `geom_raster`, which is built in to **ggplot2**. There
+are related functions for plotting rectangles and tiles.
+
+```{r}
+ggplot() +
+  geom_raster(data = DSM_HARV_df , aes(x = x, y = y, fill = fct_elevation_2)) + 
+  coord_quickmap()
+```
+
+We can customize the colors for terrain plots using the `terrain.colors` function along
+with `scale_fill_manual` from **ggplot2**.
+
+```{r}
+terrain.colors(3)
+```
+
+```{r}
+ggplot() +
+ geom_raster(data = DSM_HARV_df , aes(x = x, y = y,
+                                      fill = fct_elevation_2)) + 
+    scale_fill_manual(values = terrain.colors(3)) + 
+    coord_quickmap()
+```
+Make things more generic and a little nicer with axis labels. You can
+suppress axis labels with `theme(axis.title = element_blank())`.
+
+```{r}
+my_col <- terrain.colors(3)
+
+ggplot() +
+ geom_raster(data = DSM_HARV_df , aes(x = x, y = y,
+                                      fill = fct_elevation_2)) + 
+    scale_fill_manual(values = my_col, name = "Elevation") + 
+    coord_quickmap() + xlab("Easting") + ylab("Northing")
+```
+
+## Layering rasters
+
+> We can layer a raster on top of a hillshade raster for the same area, and use a transparency factor to create a 3-dimensional shaded effect. A hillshade is a raster that maps the shadows and texture that you would see from above when viewing terrain. We will add a custom color, making the plot grey.
+
+Read in a hillshade raster.
+
+```{r}
+DSM_hill_HARV <-
+  rast("data/NEON-DS-Airborne-Remote-Sensing/HARV/DSM/HARV_DSMhill.tif")
+
+DSM_hill_HARV
+```
+
+Convert to dataframe for plotting.
+
+```{r}
+DSM_hill_HARV_df <- as.data.frame(DSM_hill_HARV, xy = TRUE) 
+
+str(DSM_hill_HARV_df)
+```
+
+For the raster plot of the hillshade, we'll use the values as the `alpha` argument (transparency)
+in our aesthetic mapping. Since the raw `HARV_DSMhill` values aren't all valid, or desirable, transparency
+values, we'll rescale the values to all be between 0.15 and 0.65 (the default is 0.1 - 0.9). 
+
+```{r}
+ggplot() +
+  geom_raster(data = DSM_hill_HARV_df,
+              aes(x = x, y = y, alpha = HARV_DSMhill)) + 
+  scale_alpha(range =  c(0.15, 0.65), guide = "none") + 
+  coord_quickmap()
+```
+Now combine them in a layered plot.
+
+```{r}
+ggplot() +
+  geom_raster(data = DSM_HARV_df , 
+              aes(x = x, y = y, 
+                  fill = HARV_dsmCrop)) + 
+  geom_raster(data = DSM_hill_HARV_df, 
+              aes(x = x, y = y, 
+                  alpha = HARV_DSMhill)) +  
+  scale_fill_viridis_c() +  
+  scale_alpha(range = c(0.15, 0.65), guide = "none") +  
+  ggtitle("Elevation with hillshade") +
+  coord_quickmap()
+```

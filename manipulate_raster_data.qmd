@@ -1,0 +1,345 @@
+---
+title: "Manipulate Raster Data"
+format: html
+editor: visual
+---
+
+
+The main objectives are
+
+- Crop a raster to the extent of a vector layer.
+- Extract values from a raster that correspond to a vector file overlay.
+
+```{r}
+library(sf)
+library(terra)
+library(ggplot2)
+library(janitor)
+library(dplyr)
+```
+
+
+```{r}
+aoi_boundary_HARV <- st_read(
+  "data/NEON-DS-Site-Layout-Files/HARV/HarClip_UTMZ18.shp")
+
+CHM_HARV <- rast("data/NEON-DS-Airborne-Remote-Sensing/HARV/CHM/HARV_chmCrop.tif")
+CHM_HARV_df <- as.data.frame(CHM_HARV, xy = TRUE)
+
+lines_HARV <- st_read(
+  "data/NEON-DS-Site-Layout-Files/HARV/HARV_roads.shp")
+
+point_HARV <- st_read(
+  "data/NEON-DS-Site-Layout-Files/HARV/HARVtower_UTM18N.shp")
+
+plot_locations_HARV <-
+  read.csv("data/NEON-DS-Site-Layout-Files/HARV/HARV_PlotLocations.csv")
+
+plot_locations_sp_HARV <- st_as_sf(plot_locations_HARV, 
+                                   coords = c('easting', 'northing'),
+                                   crs = crs(lines_HARV))
+```
+```{r}
+ggplot() +
+  geom_raster(data = CHM_HARV_df, aes(x = x, y = y, fill = HARV_chmCrop)) + 
+  scale_fill_gradientn(name = "Canopy Height", colors = terrain.colors(10)) +
+  geom_sf(data = aoi_boundary_HARV, color = "blue", fill = NA) +
+  coord_sf()
+```
+
+Create a cropped raster based on the vector boundary.
+
+```{r}
+CHM_HARV_Cropped <- crop(x = CHM_HARV, y = aoi_boundary_HARV)
+CHM_HARV_Cropped_df <- as.data.frame(CHM_HARV_Cropped, xy = TRUE)
+```
+
+```{r}
+ggplot() +
+  geom_raster(data = CHM_HARV_Cropped_df, aes(x = x, y = y, fill = HARV_chmCrop)) + 
+  scale_fill_gradientn(name = "Canopy Height", colors = terrain.colors(10)) +
+  geom_sf(data = aoi_boundary_HARV, color = "blue", fill = NA) +
+  coord_sf()
+```
+
+If we want to keep the original extent we can create a polygon (an `sfc` object) from the bbox
+of the original uncropped raster using the `st_as_sfc()` function.
+
+```{r}
+CHM_HARV_Cropped_df <- as.data.frame(CHM_HARV_Cropped, xy = TRUE)
+
+ggplot() +
+  geom_sf(data = st_as_sfc(st_bbox(CHM_HARV)), fill = "green",
+          color = "green", alpha = .2) +  
+  geom_raster(data = CHM_HARV_Cropped_df,
+              aes(x = x, y = y, fill = HARV_chmCrop)) + 
+  scale_fill_gradientn(name = "Canopy Height", colors = terrain.colors(10)) + 
+  coord_sf()
+```
+
+```{r}
+CHM_HARV_Cropped <- crop(x = CHM_HARV, y = plot_locations_sp_HARV)
+CHM_HARV_Cropped_df <- as.data.frame(CHM_HARV_Cropped, xy = TRUE)
+
+ggplot() +
+  geom_raster(data = CHM_HARV_Cropped_df,
+              aes(x = x, y = y, fill = HARV_chmCrop)) +
+  geom_sf(data = plot_locations_sp_HARV) +
+  scale_fill_gradientn(name = "Canopy Height", colors = terrain.colors(10)) + 
+  coord_sf()
+```
+Notice we've got one point outside the raster. 
+
+## Extract Raster Pixels Values Using Vector Polygons
+
+Sometimes we want to get at pixel values for pixels contained within a polygon (or some similar raster to vector relationship).
+
+```{r}
+tree_height <- extract(x = CHM_HARV, y = aoi_boundary_HARV)
+
+str(tree_height)
+```
+
+```{r}
+ggplot() + 
+  geom_histogram(data = tree_height, aes(x = HARV_chmCrop)) +
+  ggtitle("Histogram of CHM Height Values (m)") +
+  xlab("Tree Height") + 
+  ylab("Frequency of Pixels")
+```
+If we don't want individual pixel values, we can also pass a function
+to use to summarize the data.
+
+```{r}
+mean_tree_height_AOI <- extract(x = CHM_HARV, y = aoi_boundary_HARV, fun = mean)
+
+mean_tree_height_AOI
+```
+
+## Extract Data using x,y Locations
+
+We can use the buffer argument to grab or summarize pixels within a 
+circular area of a specified radius.
+
+```{r}
+mean_tree_height_tower <- extract(x = CHM_HARV,
+                                  y = point_HARV,
+                                  buffer = 20,
+                                  fun = mean)
+
+mean_tree_height_tower
+```
+
+```{r}
+# extract data at each plot location
+mean_tree_height_plots_HARV <- extract(x = CHM_HARV,
+                                       y = plot_locations_sp_HARV,
+                                       buffer = 20,
+                                       fun = mean)
+
+# view data
+mean_tree_height_plots_HARV
+```
+
+# Raster time series
+
+```{r}
+NDVI_HARV_path <- "data/NEON-DS-Landsat-NDVI/HARV/2011/NDVI"
+
+all_NDVI_HARV <- list.files(NDVI_HARV_path,
+                            full.names = TRUE,
+                            pattern = ".tif$")
+
+all_NDVI_HARV
+```
+
+In the **raster** package we'd use `stack()` on the file list. In **terra** we can directly use `rast()`.
+
+```{r}
+NDVI_HARV_stack <- rast(all_NDVI_HARV)
+NDVI_HARV_stack
+```
+
+```{r}
+crs(NDVI_HARV_stack)
+```
+
+To plot the stack (faceted) we first need to get it into a dataframe and then
+do a little tidying.
+
+```{r}
+NDVI_HARV_stack_df <- as.data.frame(NDVI_HARV_stack, xy = TRUE)
+    
+#tidyr::gather(variable, value, -(x:y))
+
+head(NDVI_HARV_stack_df)
+```
+
+Let's pivot long.
+
+```{r}
+NDVI_HARV_stack_long_df <- tidyr::pivot_longer(NDVI_HARV_stack_df,
+                                               cols = -(x:y),
+                                               names_to = 'instance',
+                                               values_to = 'value')
+
+head(NDVI_HARV_stack_long_df)
+```
+
+Now we can plot
+
+```{r}
+NDVI_HARV_stack_long_df %>% 
+  ggplot() +
+  geom_raster(aes(x = x, y = y, fill = value)) +
+  facet_wrap(~instance)
+```
+
+NDVI values should be in [-1,1]. They've been scaled by 10000 (used to convert to integer for storage purposes).
+
+```{r}
+NDVI_HARV_stack <- rast(all_NDVI_HARV)
+NDVI_HARV_stack <- NDVI_HARV_stack/10000
+NDVI_HARV_stack_df <- as.data.frame(NDVI_HARV_stack, xy = TRUE)
+NDVI_HARV_stack_long_df <- tidyr::pivot_longer(NDVI_HARV_stack_df,
+                                               cols = -(x:y),
+                                               names_to = 'instance',
+                                               values_to = 'value')
+NDVI_HARV_stack_long_df %>% 
+  ggplot() +
+  geom_raster(aes(x = x, y = y, fill = value)) +
+  facet_wrap(~instance)
+```
+
+What's up with day 277 and 293?
+
+```{r}
+ggplot(NDVI_HARV_stack_long_df) +
+  geom_histogram(aes(value)) +
+    facet_wrap(~instance)
+```
+
+Spikes at very low NDVI values but then greener at day 309? 
+
+Let's read in some weather data.
+
+```{r}
+har_met_daily <-
+  read.csv("data/NEON-DS-Met-Time-Series/HARV/FisherTower-Met/hf001-06-daily-m.csv")
+
+str(har_met_daily)
+```
+
+The date got read as a character.
+
+```{r}
+har_met_daily$date <- as.Date(har_met_daily$date, format = "%Y-%m-%d")
+
+yr_11_daily_avg <- har_met_daily %>%
+  filter(between(date, as.Date('2011-01-01'), as.Date('2011-12-31')))
+
+ggplot() +
+  geom_point(data = yr_11_daily_avg, aes(jd, airt)) +
+  ggtitle("Daily Mean Air Temperature",
+          subtitle = "NEON Harvard Forest Field Site") +
+  xlab("Julian Day 2011") +
+  ylab("Mean Air Temperature (C)")
+```
+
+```{r}
+RGB_277 <- rast("data/NEON-DS-Landsat-NDVI/HARV/2011/RGB/277_HARV_landRGB.tif")
+RGB_277
+```
+
+As expected, the RGB values max out at 255. We need to rescale to be between
+0 and 1,
+
+```{r}
+RGB_277 <- RGB_277 / 255
+RGB_277_df <- as.data.frame(RGB_277, xy = TRUE)
+names
+```
+
+```{r}
+names(RGB_277_df)[3:5]
+paste("X", names(RGB_277_df)[3:5], sep="")
+
+names(RGB_277_df)[3:5] <- paste("X", names(RGB_277_df)[3:5], sep="")
+
+RGB_277_df$rgb <- with(RGB_277_df, rgb(X277_HARV_landRGB_1, X277_HARV_landRGB_2, X277_HARV_landRGB_3,1))
+```
+The following causes R Studio to hang (or I'm just not waiting long enought)
+```{r}
+# ggplot() +
+#   geom_raster(data=RGB_277_df, aes(x, y, fill=RGB_277_df$rgb)) + 
+#   ggtitle("Julian day 277") 
+```
+
+# Making pub quality plots
+
+Use `theme_void` to get rid of that extra gray and add some titles.
+
+```{r}
+ggplot() +
+  geom_raster(data = NDVI_HARV_stack_long_df , aes(x = x, y = y, fill = value)) +
+  facet_wrap(~instance) +
+  ggtitle("Landsat NDVI", subtitle = "NEON Harvard Forest") + 
+  theme_void() + 
+  theme(plot.title = element_text(hjust = 0.5, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5))
+```
+
+Change the color scheme.
+
+```{r}
+library(RColorBrewer)
+brewer.pal(9, "YlGn")
+```
+Use `colorRampPalette`.
+
+```{r}
+green_colors <- brewer.pal(9, "YlGn") %>%
+  colorRampPalette()
+```
+
+```{r}
+ggplot() +
+  geom_raster(data = NDVI_HARV_stack_long_df , aes(x = x, y = y, fill = value)) +
+  facet_wrap(~instance) +
+  ggtitle("Landsat NDVI", subtitle = "NEON Harvard Forest") + 
+  theme_void() + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"), 
+    plot.subtitle = element_text(hjust = 0.5)) + 
+  scale_fill_gradientn(name = "NDVI", colours = green_colors(20))
+```
+
+Cynthia Brewer, the creator of ColorBrewer, offers an online tool to help choose suitable color ramps, or to create your own. [ColorBrewer 2.0; Color Advise for Cartography](https://colorbrewer2.org/#type=sequential&scheme=BuGn&n=3).
+
+Finally, let's clean up the facet names.
+
+```{r}
+raster_names <- names(NDVI_HARV_stack)
+
+raster_names <- gsub("_HARV_ndvi_crop", "", raster_names)
+raster_names
+
+raster_names  <- paste("Day ", raster_names, sep = "")
+raster_names
+```
+
+```{r}
+labels_names <- setNames(raster_names, unique(NDVI_HARV_stack_long_df$instance))
+labels_names
+```
+
+```{r}
+ggplot() +
+  geom_raster(data = NDVI_HARV_stack_long_df , aes(x = x, y = y, fill = value)) +
+  facet_wrap(~instance, labeller = labeller(instance = labels_names)) +
+  ggtitle("Landsat NDVI", subtitle = "NEON Harvard Forest") + 
+  theme_void() + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"), 
+    plot.subtitle = element_text(hjust = 0.5)) + 
+  scale_fill_gradientn(name = "NDVI", colours = green_colors(20))
+```
+
