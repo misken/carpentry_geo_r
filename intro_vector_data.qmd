@@ -4,15 +4,20 @@ format: html
 editor: visual
 ---
 
-Now it's time for vector data. We'll use **sf**, the simple features library. Let's load **terra** as well in case we want to create plots that combine vector and raster data. The **rgdal** library is automatically loaded when **sf** is loaded. I think **rgdal** is being deprecated in 2023 - yes, see https://cran.r-project.org/web/packages/rgdal/index.html. They recommend "plan transition to sf/stars/'terra' functions using 'GDAL' and 'PROJ' at your earliest convenience". So, seems like **sf** must have its own interface to GDAL.
+Now it's time for vector data. We'll use **sf**, the simple features library. Let's load **terra** as well in case we want to create plots that combine vector and raster data. The
+GCwR book explains that **sf** has built in interface to GDAL (reading and writing geographic data files), PROJ (represent and transform projected CRS), and GEOS (geometric operations). So,
+**sf** interacts directly with low level libraries instead of R based wrappers for these libraries. 
 
-It [seems like `st_read` and `st_write`](https://r-spatial.github.io/sf/articles/sf2.html) are the interface to GDAL. I'm assuming they don't use **rdgal**.
+It [seems like `st_read` and `st_write`](https://r-spatial.github.io/sf/articles/sf2.html) are the interface to GDAL. However, it looks like **sf** has more alias I/O functions like
+`read_sf` that are **tidyverse** friendly - see `help(read_sf)`.
 
-
+Simple features is a general concept supported in many geocomputational tools
+including things like QGIS and PostGIS.
 
 ```{r warning=FALSE}
 library(sf)
 library(terra)
+#library(spData)
 ```
 
 The shapefiles that we will import are:
@@ -27,17 +32,35 @@ Start with our *area of interest* boundary. We use `st_read` to read the shapefi
 aoi_boundary_HARV <- st_read(
   "data/NEON-DS-Site-Layout-Files/HARV/HarClip_UTMZ18.shp")
 ```
+```{r}
+class(aoi_boundary_HARV)
+```
 
 The `aoi_boundary_HARV` is a simple feature object containing two variables:
 
 -   an `id`
 -   a `geometry`
 
-The `geometry` contains the polygon information.
+
+```{r}
+summary(aoi_boundary_HARV)
+```
+
+The `geometry` contains the polygon information - i.e. it's this column that gives it "spatial powers". So, vector objects are really just special dataframes. This is similar to GeoPandas and its `GeoDataFrame`.
 
 ```{r}
 aoi_boundary_HARV$geometry
 ```
+
+The geometry column is of type `sfc`, which is a list. The `sfc` object is made up of one or more `sfg` objects representing the spatial geometry elements.
+
+
+```{r}
+class(aoi_boundary_HARV$geometry)
+```
+
+
+
 
 We can get at an `sf` object's metadata via a bunch of functions.
 
@@ -57,9 +80,6 @@ st_bbox(aoi_boundary_HARV)
 st_geometry(aoi_boundary_HARV)
 ```
 
-```{r}
-```
-
 ## Plot a shapefile
 
 Unlike with raster data, we do **not** need to convert a simple features vector object to a dataframe for plotting with **ggplot2**.
@@ -70,6 +90,7 @@ ggplot() +
   ggtitle("AOI Boundary Plot") + 
   coord_sf()
 ```
+
 
 ```{r}
 lines_HARV <- st_read(
@@ -86,13 +107,24 @@ class(lines_HARV)
 class(point_HARV)
 ```
 
-So, vector objects are really just special dataframes. This is similar to GeoPandas and its `GeoDataFrame`.
-
 Each row in the data frame is a line, or point, or whatever geometric object type it is. There's a `geometry` field that contains the information needed to reconstruct the vector.
 
+The **sf** package also has built in plotting via the base R `plot` command. By
+default it plots the geometry field faceted by all the other variables, using
+color as the aesthetic mapping.
+
+```{r}
+plot(lines_HARV)
+```
+
+Pick the column to plot.
+
+```{r}
+plot(lines_HARV['TYPE'])
+```
 # Explore and Plot by Vector Layer Attributes
 
-Since our vectors are in dataframes, it shuold be easy to use standard tools like dplyr to select items of interest for plotting or computation.
+Since our vectors are in dataframes, it should be easy to use standard tools like dplyr to select items of interest for plotting or computation.
 
 ```{r}
 lines_HARV
@@ -275,6 +307,83 @@ ggplot() +
   coord_sf()
 ```
 
+So far we've used **sf**'s `plot()` method (which just extends the base R `plot()`) and the **ggplot2** package for plotting. There's also a package called **tmap** designed for thematic mapping in R.
+
+## More details on simple features
+
+This is based on [GCwR - Sec 2.2.4](https://r.geocompx.org/spatial-class.html#geometry). The most common 
+types are:
+
+* POINT - coordinate in 2, 3 or 4D space
+* LINESTRING - sequence of points connected by straight lines
+* POLYGON - sequence of points forming a closed, non-intersecting ring with no holes
+
+The MULTI versions of the above can represent a collection of **sf** objects of the same type. The GEOMETRYCOLLECTION can represent a collection of different types of **sf** objects.
+
+* MULTIPOINT
+* MULTILINESTRING
+* MULTIPOLYGON
+* GEOMETRYCOLLECTION
+
+A good descripion of how **sf** objects are created from `sfc` and `sfg` building blocks is in [Section 2.2.5 of GCwR](https://r.geocompx.org/spatial-class.html#sf).
+
+They use the example of creating an **sf** object representing the temperature in London at a specific time.
+
+```{r}
+lnd_point = st_point(c(0.1, 51.5))                 # sfg object
+lnd_geom = st_sfc(lnd_point, crs = "EPSG:4326")    # sfc object
+lnd_attrib = data.frame(                           # data.frame object
+  name = "London",
+  temperature = 25,
+  date = as.Date("2017-06-21")
+  )
+lnd_sf = st_sf(lnd_attrib, geometry = lnd_geom)    # sf object
+lnd_sf
+```
+
+Usually we don't have a need to create `sfg` objects from scratch, but we can.
+
+```{r}
+st_point(c(5, 2))                 # XY point
+#> POINT (5 2)
+st_point(c(5, 2, 3))              # XYZ point
+#> POINT Z (5 2 3)
+st_point(c(5, 2, 1), dim = "XYM") # XYM point
+#> POINT M (5 2 1)
+st_point(c(5, 2, 3, 1))           # XYZM point
+#> POINT ZM (5 2 3 1)
+```
+You can create more complex simple feature geometry objects using matrices and lists - see https://r.geocompx.org/spatial-class.html#sfg.
+
+> A simple feature geometry column (`sfc`) is a list of `sfg` objects, which is additionally able to contain information about the coordinate reference system in use.
+
+```{r}
+# sfc POINT
+point1 = st_point(c(5, 2))
+point2 = st_point(c(1, 3))
+points_sfc = st_sfc(point1, point2)
+points_sfc
+#> Geometry set for 2 features 
+#> Geometry type: POINT
+#> Dimension:     XY
+#> Bounding box:  xmin: 1 ymin: 2 xmax: 5 ymax: 3
+#> CRS:           NA
+#> POINT (5 2)
+#> POINT (1 3)
+```
+See https://r.geocompx.org/spatial-class.html#sfc for all the details.
+
+By combining an `sfc` object with a `data.frame`, we can create an **sf** object which is a spatialy powered dataframe.
+
+The **sf** package also has support for spherical operations via the **s2** interface package - see https://r.geocompx.org/spatial-class.html#s2. You can
+actually turn S2 support on and off in **sf** - it's on by default.
+
+
+
+
+
+
+
 # Ch 9 - Handling Spatial Projection & CRS
 
 https://preview.carpentries.org/r-raster-vector-geospatial/09-vector-when-data-dont-line-up-crs.html
@@ -295,6 +404,7 @@ country_boundary_US_terra <- terra::vect("data/NEON-DS-Site-Layout-Files/US-Boun
 
 country_boundary_US_sf <- st_as_sf(country_boundary_US_terra)
 ```
+
 Let's plot the US map.
 
 ```{r}
@@ -303,7 +413,8 @@ ggplot() +
   ggtitle("Map of Contiguous US State Boundaries") +
   coord_sf()
 ```
-See https://github.com/r-spatial/sf/issues/2046. 
+
+See https://github.com/r-spatial/sf/issues/2046.
 
 Hmmm. The **sf** package seems to be having trouble with this shapefile.
 
@@ -314,8 +425,7 @@ ggplot() +
   coord_sf()
 ```
 
-Now we'll plot the country boundary layer with a thicker line and
-combine with the state boundary layer.
+Now we'll plot the country boundary layer with a thicker line and combine with the state boundary layer.
 
 ```{r}
 ggplot() +
@@ -357,8 +467,7 @@ ggplot() +
 
 ## Convert from csv to other formats
 
-The Carpentry tutorial shows how to convert to shapefile, but let's also convert
-to some non-ESRI things like a GeoPackage.
+The Carpentry tutorial shows how to convert to shapefile, but let's also convert to some non-ESRI things like a GeoPackage.
 
 ```{r}
 plot_locations_HARV <-
@@ -369,17 +478,13 @@ str(plot_locations_HARV)
 
 Instead of lat/long fields we have `easting` and `northing`.
 
-We could build a proj4 string from the `geodeticDa` and `utmZone` fields or
-use some other data source that has the CRS we want as a template to set the
-CRS for this new data. From the [spatial reference website](https://www.spatialreference.org/ref/epsg/wgs-84-utm-zone-18n/proj4/) we find that the
-string is `+proj=utm +zone=18 +ellps=WGS84 +datum=WGS84 +units=m +no_defs `.
+We could build a proj4 string from the `geodeticDa` and `utmZone` fields or use some other data source that has the CRS we want as a template to set the CRS for this new data. From the [spatial reference website](https://www.spatialreference.org/ref/epsg/wgs-84-utm-zone-18n/proj4/) we find that the string is `+proj=utm +zone=18 +ellps=WGS84 +datum=WGS84 +units=m +no_defs`.
 
 ```{r}
 crs(lines_HARV)
 ```
 
-First we need to turn the dataframe into a simple features object. We can
-specify the coordinate fields and the CRS in the same step.
+First we need to turn the dataframe into a simple features object. We can specify the coordinate fields and the CRS in the same step.
 
 ```{r}
 plot_locations_sp_HARV <- st_as_sf(plot_locations_HARV, 
@@ -397,9 +502,8 @@ ggplot() +
   geom_sf(data = plot_locations_sp_HARV) +
   ggtitle("AOI Boundary Plot")
 ```
+
 Let's add some more stuff!
-
-
 
 ```{r}
 NewPhen_HARV <-
@@ -422,11 +526,8 @@ ggplot() +
   ggtitle("AOI Boundary Plot")
 ```
 
-Finally let's write out one of these simple feature objects to a file. We can
-use any [GDAL supported driver](https://gdal.org/drivers/vector/index.html).
-
+Finally let's write out one of these simple feature objects to a file. We can use any [GDAL supported driver](https://gdal.org/drivers/vector/index.html).
 
 ```{r}
 st_write(plot_locations_sp_HARV, "data/plot_locations_sp_HARV.gpkg", driver = "GPKG" )
 ```
-
